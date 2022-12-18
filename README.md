@@ -1,2 +1,2 @@
-# python-mize
+# pymize
 The python library for interacting with miZe.
