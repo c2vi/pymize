@@ -10,6 +10,9 @@ class Item():
         self.main = main
         self.id = main["__item__"]
 
+    def update(func):
+        pass
+
 
 
 
