@@ -5,13 +5,48 @@ import json
 import asyncio
 from threading import Thread
 from multiprocessing import Process
+from multiprocessing import Queue as MPQueue
 from queue import Queue
-from websockets.sync.client import connect
+#from websockets.sync.client import connect
 from time import sleep
 
-#import vim
+def recv_from_sock(sock):
+    try:
+        message = sock.recv()
+        if type(message) == str:
+            recv_queue.put(json.loads(message))
+    except Exception as e:
+        print("The WebSocket Connection was closed: ", e)
+        return
 
-class Client():
+def proc(send_queue, recv_queue, url):
+    import signal
+    import sys
+
+    sock = websocket.WebSocket()
+    sock.connect("ws://" + url)
+
+    thread = Thread(target=recv_from_sock, args=(sock))
+    thread.start()
+
+
+    #def signal_handler(sig, frame):
+        #print("signal handler")
+        #sock.send_close(status=1000, reason=b"Closing")
+        #sys.exit(0)
+
+    #signal.signal(signal.SIGTERM, signal_handler)
+    #signal.signal(signal.SIGINT, signal_handler)
+
+    while True:
+        try:
+            msg = send_queue.get()
+            sock.send(json.dumps(msg))
+        except Exception as e:
+            print("Couldn't send Message: ", e)
+
+
+class ClientProcess():
     def __init__(self, server="localhost:9432"):
         self.items = {} # the item cache
 
@@ -21,20 +56,30 @@ class Client():
         self.get_item_queues = {}
         self.get_item_callbacks = {}
         self.update_callbacks = {}
-        self.sock = connect("ws://" + self.url)
+        self.sock = websocket.WebSocket()
+        self.sock.connect("ws://" + self.url)
 
-        self.thread = Thread(target=self.run, daemon=True)
-        #self.thread.daemon = True
-        self.thread.start()
+        self.send_queue = MPQueue()
+        self.recv_queue = MPQueue()
 
-    #def run(self):
-        #asyncio.run(self.sock.run())
-        #loop = asyncio.get_running_loop()
-        #loop.stop()
-        #print("before run_until_complete")
-        #loop.run_until_complete(self.sock.run(self.url))
 
-        #self.sock.set_callback("item.give", self.on_give_message)
+        self.proc = Process(target=self.proc)
+        self.proc.start()
+
+        self.sock.send("hellolllllllllllllllllllllljlkjljjjjjjjlllllljj")
+
+        #self.thread = Thread(target=self.run)
+        #self.thread.start()
+
+    def proc(self):
+        try:
+            message = self.sock.recv()
+            if type(message) == str:
+                print("GOT: ", message)
+                #recv_queue.put(json.loads(message))
+        except Exception as e:
+            print("The WebSocket Connection was closed: ", e)
+            return
 
     def on_give_message(self, msg):
         pass
@@ -67,21 +112,17 @@ class Client():
         print("after queue: ", hi)
         return hi
 
+    def terminate(self, status=1000, reason = b"Closing"):
+        self.sock.send_close(status=staus, reason=reason)
+
     def run(self):
-        try:
-            while True:
-                print("Thread blocking on recv()")
-                message = self.sock.recv()
-                print("got message")
-                #print("GOT: ", message)
-                #if type(message) == str:
-                    #self.handle_msg(json.loads(message))
-        except Exception as e:
-            print("something went wrong in run()", e)
+        while True:
+            msg = self.recv_queue.get()
+            self.handle_msg(msg)
 
 
     def send(self, msg):
-        self.sock.send(json.dumps(msg))
+        self.send_queue.put(msg)
         print("SENT", msg)
     
     def handle_msg(self, msg):
@@ -93,6 +134,7 @@ class Client():
                     for queue in self.get_item_queues[msg["id"]]:
                         queue.put(item)
 
+                print("ID here", self.get_item_callbacks)
                 if msg["id"] in self.get_item_callbacks:
                     for callback in self.get_item_callbacks[msg["id"]]:
                         callback(item)
@@ -127,6 +169,7 @@ class Client():
 
 
     def rem_get_item_callback(self, ID, callback):
+        print("removed???")
         if not ID in self.get_item_callbacks:
             return
         self.get_item_callbacks[ID].remove(callback)

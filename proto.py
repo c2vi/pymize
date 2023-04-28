@@ -1,5 +1,5 @@
 
-from websockets.sync.client import connect
+#from websockets.sync.client import connect
 import json
 
 class Message():
