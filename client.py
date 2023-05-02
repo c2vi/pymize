@@ -9,41 +9,8 @@ from multiprocessing import Queue as MPQueue
 from queue import Queue
 #from websockets.sync.client import connect
 from time import sleep
+from copy import deepcopy
 
-def recv_from_sock(sock):
-    try:
-        message = sock.recv()
-        if type(message) == str:
-            recv_queue.put(json.loads(message))
-    except Exception as e:
-        print("The WebSocket Connection was closed: ", e)
-        return
-
-def proc(send_queue, recv_queue, url):
-    import signal
-    import sys
-
-    sock = websocket.WebSocket()
-    sock.connect("ws://" + url)
-
-    thread = Thread(target=recv_from_sock, args=(sock))
-    thread.start()
-
-
-    #def signal_handler(sig, frame):
-        #print("signal handler")
-        #sock.send_close(status=1000, reason=b"Closing")
-        #sys.exit(0)
-
-    #signal.signal(signal.SIGTERM, signal_handler)
-    #signal.signal(signal.SIGINT, signal_handler)
-
-    while True:
-        try:
-            msg = send_queue.get()
-            sock.send(json.dumps(msg))
-        except Exception as e:
-            print("Couldn't send Message: ", e)
 
 
 class ClientProcess():
@@ -62,21 +29,50 @@ class ClientProcess():
         self.send_queue = MPQueue()
         self.recv_queue = MPQueue()
 
-
         self.proc = Process(target=self.proc)
         self.proc.start()
 
-        self.sock.send("hellolllllllllllllllllllllljlkjljjjjjjjlllllljj")
-
-        #self.thread = Thread(target=self.run)
-        #self.thread.start()
+        self.thread = Thread(target=self.run, daemon=True)
+        self.thread.start()
 
     def proc(self):
+        import signal
+        import sys
+
+        #sock = websocket.WebSocket()
+        #sock.connect("ws://" + url)
+
+        thread = Thread(target=self.recv_from_sock)
+        thread.start()
+
+        while True:
+            try:
+                msg = self.send_queue.get()
+                self.sock.send(json.dumps(msg, sort_keys=False))
+                print("SENT", msg)
+            except Exception as e:
+                print("Couldn't send Message: ", e)
+                return
+
+        return
+
+        def signal_handler(sig, frame):
+            print("signal handler")
+            sock.send_close(status=1000, reason=b"Closing")
+            sys.exit(0)
+
+        signal.signal(signal.SIGTERM, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
+
+
+    def recv_from_sock(self):
         try:
-            message = self.sock.recv()
-            if type(message) == str:
-                print("GOT: ", message)
-                #recv_queue.put(json.loads(message))
+            while True:
+                message = self.sock.recv()
+                if type(message) == str:
+                    print("GOT: ", message)
+                    self.recv_queue.put(json.loads(message))
         except Exception as e:
             print("The WebSocket Connection was closed: ", e)
             return
@@ -123,7 +119,6 @@ class ClientProcess():
 
     def send(self, msg):
         self.send_queue.put(msg)
-        print("SENT", msg)
     
     def handle_msg(self, msg):
         print("GOT: ", msg)
@@ -134,7 +129,6 @@ class ClientProcess():
                     for queue in self.get_item_queues[msg["id"]]:
                         queue.put(item)
 
-                print("ID here", self.get_item_callbacks)
                 if msg["id"] in self.get_item_callbacks:
                     for callback in self.get_item_callbacks[msg["id"]]:
                         callback(item)
@@ -226,6 +220,11 @@ class ClientProcess():
                 deltas.append([[key]])
 
             elif type(new_item[key]) == dict or type(new_item[key]) == list:
+                # if that path was not a object or array in the old item
+                if type(old_item[key]) != dict or type(old_item[key]) != list:
+                    deltas.append([[key], new_item[key]])
+                    continue
+
                 #if values are objects call recursivly on inner objects
                 if type(new_item[key]) == list:
                     old = enumerate(old_item[key])
@@ -256,14 +255,47 @@ class ClientProcess():
                 pass
 
         return deltas
+    
+    def apply_delta_recursive(self, obj, path, val):
+        #print("apply recursive")
+        #print(obj)
+        #print(path)
+        #print(val)
+        key = path[0]
+
+        if len(path) == 1:
+            if type(obj) == dict:
+                obj[key] = val
+            elif type(obj) == list:
+                obj[key] = val
+            else:
+                obj = val
+
+        else: 
+            if type(obj) == dict:
+                inner_obj = obj[key]
+                path.pop(0)
+                obj[key] = apply_delta_recursive(inner_obj, path, val)
+
+            elif type(obj) == list:
+                inner_obj = obj[key]
+                path.pop(0)
+                obj[key] = apply_delta_recursive(inner_obj, path, val)
+
+            else:
+                obj = val
+
+        #print("NEW: ", obj)
+        #print("##########################")
+        return obj
 
     def apply_delta(self, item, delta):
-        old_val = item.main
+        old_item = deepcopy(item.main)
         for [path, new_val] in delta:
-            for path_el in path:
-                old_val = old_val[path_el]
-            old_val = new_val
+            new_item = self.apply_delta_recursive(old_item, path, new_val)
+
         #print("apply delta", delta, old_val, new_val, sep="\n")
+        return Item(new_item)
     
     def add_update_callback(self, ID, callback):
         if ID not in self.update_callbacks:
